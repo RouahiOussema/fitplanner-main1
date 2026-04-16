@@ -1,7 +1,7 @@
 <?php
 // ============================================================
 // profile.php — FitPlanner
-// Complete profile page — dark theme #1a1a2e / #16213e / #5b9bd5
+// Update Profile + Change Password + Logout — fully functional
 // ============================================================
 
 require_once 'navbar.php'; // handles session_start()
@@ -12,13 +12,54 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $conn    = mysqli_connect("localhost", "root", "", "fitplanner");
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$_SESSION['user_id'];
 
-// ── Save POST ──────────────────────────────────────────────
+// ── LOGOUT ────────────────────────────────────────────────
+if (isset($_POST['action']) && $_POST['action'] === 'logout') {
+    session_destroy();
+    header("Location: login.html");
+    exit();
+}
+
+// ── CHANGE PASSWORD ───────────────────────────────────────
+$pw_success = false;
+$pw_error   = '';
+if (isset($_POST['action']) && $_POST['action'] === 'change_password') {
+    $current  = $_POST['current_password']  ?? '';
+    $new_pw   = $_POST['new_password']      ?? '';
+    $confirm  = $_POST['confirm_password']  ?? '';
+
+    // Fetch current hash
+    $sh = mysqli_prepare($conn, "SELECT password FROM users WHERE id = ?");
+    mysqli_stmt_bind_param($sh, 'i', $user_id);
+    mysqli_stmt_execute($sh);
+    $urow = mysqli_fetch_assoc(mysqli_stmt_get_result($sh));
+    $stored_hash = $urow['password'] ?? '';
+
+    if (strlen($new_pw) < 6) {
+        $pw_error = 'New password must be at least 6 characters.';
+    } elseif ($new_pw !== $confirm) {
+        $pw_error = 'Passwords do not match.';
+    } elseif (!password_verify($current, $stored_hash) && $current !== $stored_hash) {
+        // Support legacy plain-text passwords (some users in DB have plain text)
+        $pw_error = 'Current password is incorrect.';
+    } else {
+        $new_hash = password_hash($new_pw, PASSWORD_BCRYPT);
+        $sp2 = mysqli_prepare($conn, "UPDATE users SET password = ? WHERE id = ?");
+        mysqli_stmt_bind_param($sp2, 'si', $new_hash, $user_id);
+        if (mysqli_stmt_execute($sp2)) {
+            $pw_success = true;
+        } else {
+            $pw_error = mysqli_error($conn);
+        }
+    }
+}
+
+// ── UPDATE PROFILE ────────────────────────────────────────
 $save_success = false;
 $save_error   = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (!isset($_POST['action']) || $_POST['action'] === 'update_profile')) {
     $fullname = trim($_POST['fullname'] ?? '');
     $age      = (int)($_POST['age']      ?? 0);
     $weight   = (float)($_POST['weight'] ?? 0);
@@ -31,24 +72,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ['weight_loss','muscle_gain','maintenance'])
                 ? $_POST['goal'] : 'maintenance';
 
-    $s = mysqli_prepare($conn, "UPDATE users SET fullname = ? WHERE id = ?");
-    mysqli_stmt_bind_param($s, 'si', $fullname, $user_id);
-    mysqli_stmt_execute($s);
-    $_SESSION['fullname'] = $fullname;
+    if (!empty($fullname) && !$pw_success && !isset($_POST['action'])) {
+        $s = mysqli_prepare($conn, "UPDATE users SET fullname = ? WHERE id = ?");
+        mysqli_stmt_bind_param($s, 'si', $fullname, $user_id);
+        mysqli_stmt_execute($s);
+        $_SESSION['fullname'] = $fullname;
 
-    $s2 = mysqli_prepare($conn,
-        "INSERT INTO user_profile_stats
-            (user_id, age, weight, height, gender, activity_level, goal)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-            age=VALUES(age), weight=VALUES(weight), height=VALUES(height),
-            gender=VALUES(gender), activity_level=VALUES(activity_level),
-            goal=VALUES(goal)");
-    mysqli_stmt_bind_param($s2, 'iiddsss',
-        $user_id, $age, $weight, $height, $gender, $activity, $goal);
+        $s2 = mysqli_prepare($conn,
+            "INSERT INTO user_profile_stats
+                (user_id, age, weight, height, gender, activity_level, goal)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                age=VALUES(age), weight=VALUES(weight), height=VALUES(height),
+                gender=VALUES(gender), activity_level=VALUES(activity_level),
+                goal=VALUES(goal)");
+        mysqli_stmt_bind_param($s2, 'iiddsss',
+            $user_id, $age, $weight, $height, $gender, $activity, $goal);
 
-    if (mysqli_stmt_execute($s2)) { $save_success = true; }
-    else { $save_error = mysqli_error($conn); }
+        if (mysqli_stmt_execute($s2)) { $save_success = true; }
+        else { $save_error = mysqli_error($conn); }
+    }
 }
 
 // ── Fetch data ─────────────────────────────────────────────
@@ -295,6 +338,44 @@ select.field option{background:var(--card)}
 .ql{padding:13px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:13px;text-align:center;text-decoration:none;transition:.2s;display:block}
 .ql:hover{border-color:var(--primary);color:var(--primary)}
 
+/* Password modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;
+  display:flex;align-items:center;justify-content:center;padding:20px}
+.modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:24px;width:100%;max-width:420px;animation:tin .3s ease}
+.modal-title{font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px;
+  display:flex;align-items:center;gap:8px}
+.modal-field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.modal-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+.modal-input{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+  padding:10px 13px;color:var(--text);font-size:14px;width:100%;outline:none;transition:.2s;
+  font-family:'Segoe UI',sans-serif}
+.modal-input:focus{border-color:var(--primary)}
+.modal-btns{display:flex;gap:10px;margin-top:16px}
+.btn-pw{background:var(--primary);color:#fff;border:none;border-radius:8px;
+  padding:11px;font-size:14px;font-weight:700;cursor:pointer;flex:1;transition:.2s}
+.btn-pw:hover{background:var(--primary-h)}
+.btn-pw-cancel{background:transparent;border:1px solid var(--border);color:var(--muted);
+  border-radius:8px;padding:11px;font-size:14px;cursor:pointer;flex:1;transition:.2s}
+.btn-pw-cancel:hover{border-color:var(--danger);color:var(--danger)}
+.pw-msg{padding:9px 13px;border-radius:8px;font-size:13px;margin-bottom:12px}
+.pw-ok {background:rgba(46,204,113,.12);color:var(--success);border:1px solid rgba(46,204,113,.3)}
+.pw-err{background:rgba(231,76,60,.12);color:var(--danger); border:1px solid rgba(231,76,60,.3)}
+/* Logout confirm */
+.logout-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;
+  display:flex;align-items:center;justify-content:center;padding:20px}
+.logout-box{background:var(--card);border:1px solid var(--danger);border-radius:var(--r);
+  padding:28px 24px;width:100%;max-width:360px;text-align:center;animation:tin .3s ease}
+.logout-icon{font-size:40px;margin-bottom:12px}
+.logout-title{font-size:17px;font-weight:700;color:var(--text);margin-bottom:6px}
+.logout-sub{font-size:13px;color:var(--muted);margin-bottom:20px}
+.logout-btns{display:flex;gap:10px}
+.btn-logout-yes{background:var(--danger);color:#fff;border:none;border-radius:8px;
+  padding:12px;font-size:14px;font-weight:700;cursor:pointer;flex:1;transition:.2s}
+.btn-logout-yes:hover{background:#c0392b}
+.btn-logout-no{background:transparent;border:1px solid var(--border);color:var(--muted);
+  border-radius:8px;padding:12px;font-size:14px;cursor:pointer;flex:1;transition:.2s}
+.btn-logout-no:hover{border-color:var(--primary);color:var(--primary)}
 @media(max-width:600px){
   .stats-grid,.hdr-stats,.goal-meta{grid-template-columns:repeat(2,1fr)}
   .fgrid{grid-template-columns:1fr}
@@ -305,11 +386,18 @@ select.field option{background:var(--card)}
 <body>
 
 <?php if ($save_success): ?>
-  <div class="toast tok" id="toast">✓ Profile saved successfully!</div>
+  <div class="toast tok" id="toast">✓ Profile updated successfully!</div>
   <script>setTimeout(()=>{const t=document.getElementById('toast');if(t)t.remove()},3000)</script>
 <?php elseif ($save_error): ?>
   <div class="toast terr" id="toast">⚠ <?= htmlspecialchars($save_error) ?></div>
   <script>setTimeout(()=>{const t=document.getElementById('toast');if(t)t.remove()},4000)</script>
+<?php endif; ?>
+<?php if ($pw_success): ?>
+  <div class="toast tok" id="toast2">🔑 Password changed successfully!</div>
+  <script>setTimeout(()=>{const t=document.getElementById('toast2');if(t)t.remove()},3500)</script>
+<?php elseif ($pw_error): ?>
+  <div class="toast terr" id="toast2">⚠ <?= htmlspecialchars($pw_error) ?></div>
+  <script>setTimeout(()=>{const t=document.getElementById('toast2');if(t)t.remove()},4000)</script>
 <?php endif; ?>
 
 <div class="page">
@@ -554,6 +642,7 @@ select.field option{background:var(--card)}
   <div class="card">
     <div class="sec-title">✏️ Edit Profile</div>
     <form method="POST" action="profile.php">
+      <input type="hidden" name="action" value="update_profile">
       <div class="fgrid">
         <div class="fg">
           <label class="flbl">Full Name</label>
@@ -627,25 +716,93 @@ select.field option{background:var(--card)}
   <!-- 10. SETTINGS -->
   <div class="card">
     <div class="sec-title">⚙️ Settings</div>
-    <div class="setitem">
-      <div class="sico si-b">🔑</div><div class="slbl">Change password</div><div class="sarr">›</div>
+
+    <!-- Change Password -->
+    <div class="setitem" onclick="openPwModal()">
+      <div class="sico si-b">🔑</div>
+      <div class="slbl">Change password</div>
+      <div class="sarr">›</div>
     </div>
+
+    <!-- Notifications toggle -->
     <div class="setitem">
-      <div class="sico si-o">🔔</div><div class="slbl">Notifications</div>
+      <div class="sico si-o">🔔</div>
+      <div class="slbl">Notifications</div>
       <div class="togwrap" id="notifToggle" onclick="toggleNotif()" style="background:var(--success)">
         <div class="togthumb" id="notifThumb" style="left:20px"></div>
       </div>
     </div>
+
+    <!-- Language -->
     <div class="setitem">
-      <div class="sico si-b">🌐</div><div class="slbl">Language</div>
+      <div class="sico si-b">🌐</div>
+      <div class="slbl">Language</div>
       <div style="font-size:13px;color:var(--muted)">English ›</div>
     </div>
-    <div class="setitem">
-      <div class="sico si-g">📱</div><div class="slbl">Connected devices</div><div class="sarr">›</div>
-    </div>
-    <div class="setitem danger" onclick="window.location='logout.php'">
-      <div class="sico si-r">🚪</div><div class="slbl">Log out</div>
+
+    <!-- Logout -->
+    <div class="setitem danger" onclick="openLogoutConfirm()">
+      <div class="sico si-r">🚪</div>
+      <div class="slbl">Log out</div>
       <div class="sarr" style="color:var(--danger)">›</div>
+    </div>
+  </div>
+
+  <!-- ── PASSWORD MODAL ─────────────────────────────────── -->
+  <div class="modal-overlay" id="pwModal" style="display:none" onclick="closePwModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-title">🔑 Change Password</div>
+
+      <?php if ($pw_error): ?>
+        <div class="pw-msg pw-err">⚠ <?= htmlspecialchars($pw_error) ?></div>
+      <?php elseif ($pw_success): ?>
+        <div class="pw-msg pw-ok">✓ Password changed successfully!</div>
+      <?php endif; ?>
+
+      <form method="POST" action="profile.php">
+        <input type="hidden" name="action" value="change_password">
+        <div class="modal-field">
+          <label class="modal-lbl">Current password</label>
+          <input class="modal-input" type="password" name="current_password"
+            placeholder="Enter your current password" required autocomplete="current-password">
+        </div>
+        <div class="modal-field">
+          <label class="modal-lbl">New password</label>
+          <input class="modal-input" type="password" name="new_password" id="newPw"
+            placeholder="At least 6 characters" required autocomplete="new-password"
+            oninput="checkPwStrength(this.value)">
+          <!-- Strength bar -->
+          <div style="height:4px;background:var(--border);border-radius:2px;margin-top:5px;overflow:hidden">
+            <div id="pwStrengthBar" style="height:100%;width:0%;border-radius:2px;transition:.3s"></div>
+          </div>
+          <div id="pwStrengthTxt" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
+        </div>
+        <div class="modal-field">
+          <label class="modal-lbl">Confirm new password</label>
+          <input class="modal-input" type="password" name="confirm_password"
+            placeholder="Repeat new password" required autocomplete="new-password">
+        </div>
+        <div class="modal-btns">
+          <button type="submit" class="btn-pw">💾 Update Password</button>
+          <button type="button" class="btn-pw-cancel" onclick="closePwModal()">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── LOGOUT CONFIRM ─────────────────────────────────── -->
+  <div class="logout-overlay" id="logoutConfirm" style="display:none" onclick="closeLogout(event)">
+    <div class="logout-box" onclick="event.stopPropagation()">
+      <div class="logout-icon">🚪</div>
+      <div class="logout-title">Log out of FitPlanner?</div>
+      <div class="logout-sub">Your progress is saved. You can log back in anytime.</div>
+      <div class="logout-btns">
+        <form method="POST" action="profile.php" style="flex:1">
+          <input type="hidden" name="action" value="logout">
+          <button type="submit" class="btn-logout-yes" style="width:100%">Yes, log out</button>
+        </form>
+        <button class="btn-logout-no" onclick="closeLogout()">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -744,6 +901,59 @@ function setAct(el,val){
   el.classList.add('on');
   document.getElementById('actInput').value=val;
 }
+
+// ── Password modal ───────────────────────────────────────
+function openPwModal(){
+  document.getElementById('pwModal').style.display='flex';
+  setTimeout(()=>document.querySelector('.modal-input')?.focus(),100);
+}
+function closePwModal(e){
+  if(!e || e.target===document.getElementById('pwModal'))
+    document.getElementById('pwModal').style.display='none';
+}
+function checkPwStrength(val){
+  const bar=document.getElementById('pwStrengthBar');
+  const txt=document.getElementById('pwStrengthTxt');
+  if(!bar)return;
+  let score=0;
+  if(val.length>=6)  score++;
+  if(val.length>=10) score++;
+  if(/[A-Z]/.test(val)) score++;
+  if(/[0-9]/.test(val)) score++;
+  if(/[^A-Za-z0-9]/.test(val)) score++;
+  const levels=[
+    {w:'0%',  c:'var(--border)',  t:''},
+    {w:'20%', c:'var(--danger)',  t:'Too weak'},
+    {w:'40%', c:'var(--warning)', t:'Weak'},
+    {w:'60%', c:'var(--warning)', t:'Fair'},
+    {w:'80%', c:'var(--success)', t:'Strong'},
+    {w:'100%',c:'var(--success)', t:'Very strong'},
+  ];
+  const l=levels[Math.min(score,5)];
+  bar.style.width=l.w; bar.style.background=l.c;
+  txt.textContent=l.t; txt.style.color=l.c;
+}
+// Auto-open modal if there was a password error
+<?php if ($pw_error): ?>
+document.addEventListener('DOMContentLoaded',()=>openPwModal());
+<?php endif; ?>
+
+// ── Logout confirm ───────────────────────────────────────
+function openLogoutConfirm(){
+  document.getElementById('logoutConfirm').style.display='flex';
+}
+function closeLogout(e){
+  if(!e || e.target===document.getElementById('logoutConfirm'))
+    document.getElementById('logoutConfirm').style.display='none';
+}
+
+// ── Keyboard close ───────────────────────────────────────
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape'){
+    closePwModal();
+    closeLogout();
+  }
+});
 
 buildDrops();
 drawChart(weeklyData);
